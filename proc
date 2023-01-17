@@ -1,0 +1,116 @@
+CREATE DEFINER=`root`@`localhost` PROCEDURE `Insert_class_teacher_All`()
+BEGIN
+    DECLARE b_ids INT;
+    DECLARE sections CHAR(1);
+    Declare c_ids INT;
+    Declare lab_ids INT;
+    Declare t_ids INT;
+    DECLARE days int;
+    DECLARE lessons int;
+    Declare done int default 0;
+    Declare str VARCHAR(100);
+  --  Declare counts int default 0;
+    DECLARE cur CURSOR FOR (SELECT b_id, section, c_id, lab_id, t_id FROM class_teacher);
+	DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+    OPEN cur;
+    
+    read_loop: LOOP
+		FETCH cur INTO b_ids, sections,c_ids,lab_ids,t_ids;
+        if done = 1  then
+			leave read_loop;
+		end if;
+        set @theory_count = 0;
+        set @lab_count = 0;
+        set @count_loop = 0;
+        inside: LOOP
+		#	set str = concat('Error in accomodating:',(select t_name FROM teachers where t_id = t_ids),' ',
+		#											(select c_name from courses where c_id=c_ids));
+		#	if @count_loop > 5000 then
+		#		 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = str;
+		#	end if;
+            set @count_loop = @count_loop +1;
+				
+            SET days :=(SELECT day_id FROM timetable 
+            WHERE b_id = b_ids AND section = sections AND c_id ORDER BY RAND() LIMIT 1);
+			SET lessons :=
+            (SELECT lecture_no FROM timetable 
+            WHERE b_id = b_ids AND sections = sections AND day_id = days ORDER BY RAND() LIMIT 1);
+            if
+                EXISTS(Select c_id from timetable where day_id = days AND lecture_no = lessons AND
+                b_id = b_ids AND section = sections AND c_id is null)#lesson free
+                AND
+                (select count(*) from timetable where day_id = days AND b_id = b_ids and section = sections
+							and c_id = c_ids AND lab_id = lab_ids) = 0  #lesson not taught today
+				AND 
+				(Select count(*) from timetable as t where day_id=days AND 
+                lecture_no=lessons AND t_id = t_ids )=0 #lesson-teacher free
+			THEN Begin
+					if
+						lab_ids = 0 #not lab
+					THEN begin
+                    if (Select lab_id from courses where c_id = c_ids) = 1 then
+                    BEGIN
+						if @theory_count = (Select credit_hours from courses as c where c.c_id = c_ids) - 1 THEN #maxed change
+							iterate read_loop;
+						end if;
+					END;
+                    ELSE
+						if @theory_count = (Select credit_hours from courses as c where c.c_id = c_ids) THEN #maxed change
+							iterate read_loop;
+						end if;
+					END IF;
+                    
+						if
+							((Select credit_hours from courses as c where c.c_id = c_ids) - @theory_count)-2 >= 0 #atleast two ch rem
+						Then BEGIN
+							if
+								EXISTS(Select c_id from timetable where day_id=days  AND
+								lecture_no=lessons+1 AND b_id=b_ids AND
+								section = sections AND lessons+1<=8 AND c_id is null)#lesson+1 free
+								AND
+								(Select count(*) from timetable as t where day_id=days AND 
+								lecture_no=lessons+1 AND t_id = t_ids )=0#lesson+1-teacher free
+							THEN BEGIN
+								UPDATE timetable set c_id = c_ids, t_id=t_ids, lab_id=lab_ids where 
+								day_id=days AND (lecture_no=lessons OR lecture_no=lessons+1) AND
+								b_id=b_ids AND section=sections;
+								SET @theory_count = @theory_count+2;
+							END;END if;
+						END;
+						ELSE BEGIN
+							UPDATE timetable set c_id = c_ids, t_id=t_ids, lab_id=lab_ids where 
+								day_id=days AND lecture_no=lessons AND
+								b_id=b_ids AND section=sections;
+								SET @theory_count = @theory_count+1;
+						end; END IF;
+					END;#kdmfkd
+					ELSE if 
+						lab_ids = 1
+					THEN BEGIN
+						if @lab_count = 1 THEN #maxed change
+							iterate read_loop;
+						end if;
+						if
+							EXISTS(Select c_id from timetable where day_id=days  AND
+							lecture_no=lessons+1 AND b_id=b_ids AND
+							section = sections AND lessons+1<=8 AND c_id is null)#lesson+1 free
+							AND
+							EXISTS(Select c_id from timetable where day_id=days  AND
+							lecture_no=lessons+2 AND b_id=b_ids AND
+							section = sections AND lessons+2<=8 AND c_id is null)#lesson+2 free
+							AND
+							(Select count(*) from timetable as t where day_id=days AND 
+							lecture_no=lessons+2 AND t_id = t_ids )=0#lesson+2-teacher free
+						THEN BEGIN
+							UPDATE timetable set c_id = c_ids, t_id=t_ids, lab_id=lab_ids where 
+							day_id=days AND (lecture_no=lessons OR lecture_no=lessons+1 OR lecture_no=lessons+2) AND
+							b_id=b_ids AND section=sections;
+							SET @lab_count = @lab_count+1;
+						END;END if;
+					END;END if;
+				END if;
+            END;End if;
+        end LOOP;
+    END LOOP;
+    CLOSE cur;
+END
